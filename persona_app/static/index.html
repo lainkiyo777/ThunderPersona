@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Persona RAG</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand-row">
+          <div>
+            <div class="brand">Persona RAG</div>
+            <div id="targetName" class="muted">Loading</div>
+          </div>
+          <button id="reloadBtn" class="icon-btn" title="Reload data">↻</button>
+        </div>
+
+        <section class="panel">
+          <h2>Profile</h2>
+          <dl class="stats-grid">
+            <div><dt>Messages</dt><dd id="statMessages">-</dd></div>
+            <div><dt>Avg chars</dt><dd id="statAvg">-</dd></div>
+            <div><dt>Short</dt><dd id="statShort">-</dd></div>
+            <div><dt>Laugh</dt><dd id="statLaugh">-</dd></div>
+            <div><dt>Questions</dt><dd id="statQuestion">-</dd></div>
+            <div><dt>Emoji</dt><dd id="statEmoji">-</dd></div>
+          </dl>
+        </section>
+
+        <section class="panel">
+          <h2>Controls</h2>
+          <label class="field">
+            <span>Top K</span>
+            <input id="topK" type="number" min="1" max="12" value="5" />
+          </label>
+          <label class="field">
+            <span>Retriever</span>
+            <select id="retriever">
+              <option value="hybrid" selected>Hybrid</option>
+              <option value="vector">Vector</option>
+              <option value="bm25">BM25</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Answer</span>
+            <select id="answerBackend">
+              <option value="api" selected>DeepSeek</option>
+              <option value="local_lora">Local LoRA</option>
+            </select>
+          </label>
+          <label class="check-row">
+            <input id="saveRun" type="checkbox" />
+            <span>Save prompt</span>
+          </label>
+          <div id="apiState" class="status-pill">Checking API</div>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <h1>Chat Workbench</h1>
+            <p id="runtimeLine">Local retrieval</p>
+          </div>
+          <div class="top-actions">
+            <span id="memoryState" class="status-pill memory-pill">0 turns in context</span>
+            <button id="clearMemoryBtn" class="secondary">Clear Context</button>
+            <button id="copyBtn" class="secondary">Copy Output</button>
+          </div>
+        </header>
+
+        <section class="composer">
+          <textarea id="queryInput" rows="5" placeholder="输入当前消息或多轮上下文"></textarea>
+          <div class="action-row">
+            <button id="promptBtn" class="primary">Generate Prompt</button>
+            <button id="answerBtn" class="secondary">Generate Answer</button>
+          </div>
+        </section>
+
+        <section class="output-area">
+          <div class="section-title">
+            <h2>Output</h2>
+            <span id="statusText" class="muted">Ready</span>
+          </div>
+          <pre id="outputBox" class="output-box"></pre>
+        </section>
+
+        <section class="sources-area">
+          <div class="section-title">
+            <h2>Sources</h2>
+            <span id="sourceCount" class="muted">0</span>
+          </div>
+          <div id="sourcesList" class="sources-list"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
