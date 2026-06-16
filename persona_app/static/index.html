@@ -10,56 +10,17 @@
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand-row">
-          <div>
+          <div class="brand-mark" aria-hidden="true">T</div>
+          <div class="brand-copy">
             <div class="brand">ThunderPersona</div>
             <div id="targetName" class="muted">Loading</div>
           </div>
           <button id="reloadBtn" class="icon-btn" title="Reload data" aria-label="Reload data">↻</button>
         </div>
 
-        <section class="panel">
-          <h2>Profile</h2>
-          <dl class="stats-grid">
-            <div><dt>Messages</dt><dd id="statMessages">-</dd></div>
-            <div><dt>Avg chars</dt><dd id="statAvg">-</dd></div>
-            <div><dt>Short</dt><dd id="statShort">-</dd></div>
-            <div><dt>Laugh</dt><dd id="statLaugh">-</dd></div>
-            <div><dt>Questions</dt><dd id="statQuestion">-</dd></div>
-            <div><dt>Emoji</dt><dd id="statEmoji">-</dd></div>
-          </dl>
-        </section>
-
-        <section class="panel">
-          <h2>Controls</h2>
-          <label class="field">
-            <span>Top K</span>
-            <input id="topK" type="number" min="1" max="12" value="5" />
-          </label>
-          <label class="field">
-            <span>Retriever</span>
-            <select id="retriever">
-              <option value="hybrid" selected>Hybrid</option>
-              <option value="vector">Vector</option>
-              <option value="bm25">BM25</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Answer</span>
-            <select id="answerBackend">
-              <option value="api" selected>DeepSeek</option>
-              <option value="local_lora">Local LoRA</option>
-            </select>
-          </label>
-          <label class="check-row">
-            <input id="saveRun" type="checkbox" />
-            <span>Save prompt</span>
-          </label>
-          <div id="apiState" class="status-pill">Checking API</div>
-        </section>
-
-        <section class="panel">
+        <section class="panel persona-panel">
           <div class="panel-title-row">
-            <h2>Distilled Personas</h2>
+            <h2>Personas</h2>
             <button id="refreshPersonasBtn" class="tiny-btn" title="Refresh personas" aria-label="Refresh personas">↻</button>
           </div>
           <div id="personaList" class="persona-list"></div>
@@ -72,7 +33,7 @@
           </div>
           <label class="field">
             <span>Search name or remark</span>
-            <input id="contactSearch" type="search" placeholder="输入微信好友名/备注名" autocomplete="off" />
+            <input id="contactSearch" type="search" placeholder="输入微信好友名 / 备注名" autocomplete="off" />
           </label>
           <div id="contactIndexState" class="muted small-text">Contact index not loaded</div>
           <div id="contactResults" class="contact-results"></div>
@@ -106,16 +67,58 @@
             <div id="distillProgressMessage" class="muted small-text">Ready</div>
           </div>
         </section>
+
+        <section class="panel compact-panel">
+          <h2>Profile</h2>
+          <dl class="stats-grid">
+            <div><dt>Messages</dt><dd id="statMessages">-</dd></div>
+            <div><dt>Avg chars</dt><dd id="statAvg">-</dd></div>
+            <div><dt>Short</dt><dd id="statShort">-</dd></div>
+            <div><dt>Laugh</dt><dd id="statLaugh">-</dd></div>
+            <div><dt>Questions</dt><dd id="statQuestion">-</dd></div>
+            <div><dt>Emoji</dt><dd id="statEmoji">-</dd></div>
+          </dl>
+        </section>
+
+        <section class="panel compact-panel controls-panel">
+          <h2>Controls</h2>
+          <div class="control-grid">
+            <label class="field">
+              <span>Top K</span>
+              <input id="topK" type="number" min="1" max="12" value="5" />
+            </label>
+            <label class="field">
+              <span>Retriever</span>
+              <select id="retriever">
+                <option value="hybrid" selected>Hybrid</option>
+                <option value="vector">Vector</option>
+                <option value="bm25">BM25</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Answer</span>
+              <select id="answerBackend">
+                <option value="api" selected>DeepSeek</option>
+                <option value="local_lora">Local LoRA</option>
+              </select>
+            </label>
+          </div>
+          <label class="check-row">
+            <input id="saveRun" type="checkbox" />
+            <span>Save prompt</span>
+          </label>
+          <div id="apiState" class="status-pill">Checking API</div>
+        </section>
       </aside>
 
       <main class="workspace">
         <header class="topbar">
-          <div>
-            <h1>Chat Workbench</h1>
+          <div class="topbar-copy">
+            <span class="eyebrow">Persona Workbench</span>
+            <h1>今天想让它怎么回？</h1>
             <p id="runtimeLine">Local retrieval</p>
           </div>
           <div class="top-actions">
-            <span id="memoryState" class="status-pill memory-pill">0 turns in context</span>
             <button id="newChatBtn" class="secondary">New Chat</button>
             <button id="saveChatBtn" class="secondary">Save Chat</button>
             <button id="clearMemoryBtn" class="secondary">Clear Context</button>
@@ -125,11 +128,23 @@
         </header>
 
         <section class="composer">
-          <textarea id="queryInput" rows="5" placeholder="输入当前微信消息，或粘贴多轮上下文"></textarea>
+          <div class="composer-meta">
+            <span class="compose-label">Message</span>
+            <span id="memoryState" class="status-pill memory-pill">0 turns in context</span>
+          </div>
+          <textarea id="queryInput" rows="6" placeholder="把当前微信消息贴进来，或者继续上一轮对话"></textarea>
           <div class="action-row">
             <button id="promptBtn" class="primary">Generate Prompt</button>
             <button id="answerBtn" class="secondary">Generate Answer</button>
           </div>
+        </section>
+
+        <section class="output-area">
+          <div class="section-title">
+            <h2>Output</h2>
+            <span id="statusText" class="muted" aria-live="polite">Ready</span>
+          </div>
+          <pre id="outputBox" class="output-box"></pre>
         </section>
 
         <section class="dna-area">
@@ -171,14 +186,6 @@
               <ul id="dnaAntiPatterns" class="mini-list"></ul>
             </div>
           </div>
-        </section>
-
-        <section class="output-area">
-          <div class="section-title">
-            <h2>Output</h2>
-            <span id="statusText" class="muted" aria-live="polite">Ready</span>
-          </div>
-          <pre id="outputBox" class="output-box"></pre>
         </section>
 
         <section class="sources-area">
