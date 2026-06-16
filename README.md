@@ -10,6 +10,7 @@ RAG-backed WeChat persona workbench: export a chat history, build a searchable s
 - Builds RAG chunks for BM25 retrieval and optional FAISS vector search.
 - Generates a persona prompt from historical style statistics, retrieved chat snippets, and a Persona DNA profile.
 - Surfaces a Persona DNA panel with rhythm, voice, interaction style, phrase bank, anti-patterns, confidence, and honest boundaries.
+- Presents a calmer local product-tool UI with refined panels, clearer controls, progress feedback, accessible focus states, and responsive layout behavior.
 - Serves a local web workbench at `http://127.0.0.1:8765`.
 - Supports answer backends:
   - `DeepSeek` via OpenAI-compatible chat completions.
@@ -100,6 +101,16 @@ The workbench keeps two chat states:
 
 Use `New Chat` to start a clean conversation with the active persona. Use `Save Chat` to write the current transcript to `.wechat-exports/chat_sessions/` as both JSON and Markdown.
 
+## Latest UI Refresh
+
+The workbench has been visually upgraded for longer local RAG/persona sessions:
+
+- Refined neutral color system with subtle blue/orange accents, softer borders, and lighter shadows.
+- Cleaner sidebar hierarchy for profile stats, runtime controls, distilled personas, and contact distillation.
+- More polished composer, Persona DNA cards, output console, source details, progress bar, and status pills.
+- Better keyboard visibility through consistent focus states on buttons, inputs, selects, textareas, and summaries.
+- Responsive rules for desktop and mobile without changing existing element IDs, API routes, or data flow.
+
 ## Persona DNA
 
 ThunderPersona borrows the strongest idea from high-quality skill distillation projects: do not only mimic surface wording. The app now extracts a compact profile before each prompt:
@@ -107,7 +118,7 @@ ThunderPersona borrows the strongest idea from high-quality skill distillation p
 - Rhythm: average length, short-reply rate, and burst behavior.
 - Voice: laugh markers, question rate, emoji rate, and punctuation intensity.
 - Interaction: when to comfort, tease, ask back, or answer directly.
-- Phrase bank: recurring short replies and口头禅 candidates.
+- Phrase bank: recurring short replies and catchphrase candidates.
 - Anti-patterns: reply shapes to avoid, such as customer-service prose, AI analysis, over-stuffed catchphrases, and fabricated context.
 - Honest boundaries: what the simulation should not infer or fabricate.
 

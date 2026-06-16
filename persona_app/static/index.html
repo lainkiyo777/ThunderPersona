@@ -60,7 +60,7 @@
         <section class="panel">
           <div class="panel-title-row">
             <h2>Distilled Personas</h2>
-            <button id="refreshPersonasBtn" class="tiny-btn" title="Refresh personas">↻</button>
+            <button id="refreshPersonasBtn" class="tiny-btn" title="Refresh personas" aria-label="Refresh personas">↻</button>
           </div>
           <div id="personaList" class="persona-list"></div>
         </section>
@@ -68,7 +68,7 @@
         <section class="panel distill-panel">
           <div class="panel-title-row">
             <h2>Distill Contact</h2>
-            <button id="refreshContactsBtn" class="tiny-btn">Index</button>
+            <button id="refreshContactsBtn" class="tiny-btn" aria-label="Rebuild contact index">Index</button>
           </div>
           <label class="field">
             <span>Search name or remark</span>
@@ -176,7 +176,7 @@
         <section class="output-area">
           <div class="section-title">
             <h2>Output</h2>
-            <span id="statusText" class="muted">Ready</span>
+            <span id="statusText" class="muted" aria-live="polite">Ready</span>
           </div>
           <pre id="outputBox" class="output-box"></pre>
         </section>
