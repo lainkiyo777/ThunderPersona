@@ -1,10 +1,8 @@
-"""Local RAG + persona prompt MVP for a WeChat contact.
+"""Local RAG + persona prompt workbench for a WeChat contact.
 
-This script intentionally has no third-party dependencies. It loads the cleaned
-JSONL files produced by prepare_wechat_persona_dataset.py, retrieves relevant
-chat-history chunks with BM25, and builds a persona prompt that can be pasted
-into a chat model. If OPENAI_API_KEY is configured, --answer can call the
-OpenAI Responses API directly.
+This module loads cleaned JSONL files produced by
+prepare_wechat_persona_dataset.py, retrieves relevant chat-history chunks, and
+builds a persona prompt for private writing-style simulation.
 """
 
 from __future__ import annotations
@@ -35,6 +33,9 @@ EMOJI_RE = re.compile(
     "\U0001fa70-\U0001faff"
     "]"
 )
+LAUGH_MARKERS = ("哈哈", "hhh", "笑死", "笑", "草")
+QUESTION_MARKERS = ("?", "？", "吗", "嘛", "呢", "怎么", "为什么", "为啥", "啥")
+EXCLAIM_MARKERS = ("!", "！")
 
 
 @dataclass
@@ -148,47 +149,186 @@ def top_short_phrases(contents: list[str], limit: int = 12) -> list[str]:
     return [phrase for phrase, count in counter.most_common(limit) if count >= 2]
 
 
+def ratio_label(value: float, low: float, high: float, low_label: str, mid_label: str, high_label: str) -> str:
+    if value < low:
+        return low_label
+    if value >= high:
+        return high_label
+    return mid_label
+
+
+def confidence_summary(message_count: int) -> dict:
+    if message_count >= 3000:
+        return {
+            "level": "high",
+            "label": "High confidence",
+            "summary": "样本量充足，可以稳定刻画短句、节奏、口癖和常见互动方式。",
+        }
+    if message_count >= 600:
+        return {
+            "level": "medium",
+            "label": "Medium confidence",
+            "summary": "样本量可用，适合做聊天风格模拟；少见场景仍需要依赖检索片段。",
+        }
+    return {
+        "level": "low",
+        "label": "Low confidence",
+        "summary": "样本量偏少，只能做轻量风格参考，不应该强行补全没有证据的关系细节。",
+    }
+
+
+def build_persona_dna(
+    target_name: str,
+    message_count: int,
+    avg_chars: float,
+    median_chars: float,
+    short_rate: float,
+    laugh_rate: float,
+    question_rate: float,
+    emoji_rate: float,
+    exclaim_rate: float,
+    avg_burst: float,
+    phrases: list[str],
+) -> dict:
+    rhythm_label = ratio_label(short_rate, 0.35, 0.70, "完整句偏多", "短句和完整句混合", "高频短句")
+    affect_label = ratio_label(laugh_rate, 0.04, 0.14, "情绪标记少", "偶尔用笑声缓冲", "笑声存在感强")
+    question_label = ratio_label(question_rate, 0.05, 0.14, "少追问", "会自然追问", "追问和反问明显")
+    emoji_label = ratio_label(emoji_rate, 0.02, 0.08, "很少用 emoji", "偶尔用 emoji", "emoji 较明显")
+
+    rhythm_summary = (
+        f"平均 {avg_chars:.2f} 字，中位数 {median_chars:g} 字；"
+        f"短回复占 {pct(short_rate)}，平均连续回复 {avg_burst:.2f} 条。"
+    )
+    voice_summary = (
+        f"{affect_label}，{question_label}，{emoji_label}；"
+        f"感叹号占比 {pct(exclaim_rate)}。"
+    )
+
+    return {
+        "target_name": target_name,
+        "confidence": confidence_summary(message_count),
+        "rhythm": {
+            "label": rhythm_label,
+            "summary": rhythm_summary,
+            "signals": [
+                f"短回复率 {pct(short_rate)}",
+                f"平均字数 {avg_chars:.2f}",
+                f"连续回复 {avg_burst:.2f} 条",
+            ],
+        },
+        "voice": {
+            "label": affect_label,
+            "summary": voice_summary,
+            "signals": [
+                f"笑声率 {pct(laugh_rate)}",
+                f"追问率 {pct(question_rate)}",
+                f"emoji 率 {pct(emoji_rate)}",
+            ],
+        },
+        "interaction": {
+            "label": question_label,
+            "summary": "互动方式由追问率、短句率和检索片段共同决定；更像聊天反应，而不是观点输出。",
+            "signals": [
+                "情绪消息优先短安抚或轻打趣",
+                "具体问题优先检索相似片段",
+                "缺少证据时少发挥",
+            ],
+        },
+        "phrase_bank": phrases[:10],
+        "response_protocol": [
+            "先判断当前用户消息的情绪和关系语境，再决定是安抚、打趣、追问还是直接回答。",
+            "优先输出短微信回复；除非历史片段支持长回复，否则不要写成解释文或分析文。",
+            "遇到历史里没有证据的事实或关系细节，用含糊、自然的说法带过，不要编故事。",
+            "保留口语节奏，但避免把高频口癖堆满每一句，防止变成夸张模仿。",
+        ],
+        "anti_patterns": [
+            "不要写成客服式完整句、公众号式鸡汤或 AI 助手式分析。",
+            "不要连续列出多条候选回复；除非用户明确要求，只给最终可发送文本。",
+            "不要为了像而强行塞满哈哈、语气词或口头禅。",
+            "不要补全聊天记录里没有的身份、地点、动机、关系细节。",
+        ],
+        "honest_boundaries": [
+            "这是基于聊天记录的风格模拟，不是本人，也不代表本人真实想法。",
+            "只模拟聊天表达，不推断隐私、身份、位置、财务、账号等敏感信息。",
+            "检索不到相近场景时，回答只能参考整体风格，准确度会下降。",
+            "不用于冒充本人联系第三方或制造误导性对话截图。",
+        ],
+    }
+
+
 def build_persona(messages: list[dict], target_name: str) -> dict:
     target = [m for m in messages if m.get("role") == "target"]
     contents = [m.get("content", "") for m in target if m.get("content")]
     lengths = [len(text) for text in contents] or [0]
     burst_count, avg_burst = count_bursts(messages, target_name)
 
-    laugh_count = sum(1 for text in contents if "哈" in text or "hhh" in text.lower())
+    laugh_count = sum(1 for text in contents if any(mark in text.lower() for mark in LAUGH_MARKERS))
     emoji_count = sum(1 for text in contents if EMOJI_RE.search(text))
-    question_count = sum(1 for text in contents if any(mark in text for mark in ("?", "？", "吗", "咋", "怎么", "为啥", "啥")))
-    exclaim_count = sum(1 for text in contents if "!" in text or "！" in text)
+    question_count = sum(1 for text in contents if any(mark in text for mark in QUESTION_MARKERS))
+    exclaim_count = sum(1 for text in contents if any(mark in text for mark in EXCLAIM_MARKERS))
     short_count = sum(1 for length in lengths if length <= 8)
+
+    short_rate = short_count / max(len(lengths), 1)
+    laugh_rate = laugh_count / max(len(contents), 1)
+    question_rate = question_count / max(len(contents), 1)
+    emoji_rate = emoji_count / max(len(contents), 1)
+    exclaim_rate = exclaim_count / max(len(contents), 1)
+    phrases = top_short_phrases(contents)
 
     style_rules = []
     if statistics.mean(lengths) <= 12:
         style_rules.append("回复偏短，优先用一两句微信口语，不写长段解释。")
     else:
         style_rules.append("可以写完整句，但仍保持微信聊天的自然节奏。")
-    if short_count / max(len(lengths), 1) >= 0.45:
+    if short_rate >= 0.45:
         style_rules.append("大量使用短反应句，必要时连续发两三条短句。")
-    if laugh_count / max(len(contents), 1) >= 0.12:
+    if laugh_rate >= 0.12:
         style_rules.append("常用哈哈类笑声缓冲语气，但不要每句都加。")
-    if question_count / max(len(contents), 1) >= 0.12:
+    if question_rate >= 0.12:
         style_rules.append("会用反问、追问和口语化疑问推动对话。")
-    if emoji_count / max(len(contents), 1) < 0.05:
+    if emoji_rate < 0.05:
         style_rules.append("emoji 使用较少，除非上下文强烈需要。")
-    if exclaim_count / max(len(contents), 1) < 0.08:
+    if exclaim_rate < 0.08:
         style_rules.append("语气通常不靠大量感叹号堆叠。")
+
+    avg_chars = round(statistics.mean(lengths), 2)
+    median_chars = statistics.median(lengths)
+    persona_dna = build_persona_dna(
+        target_name=target_name,
+        message_count=len(contents),
+        avg_chars=avg_chars,
+        median_chars=median_chars,
+        short_rate=short_rate,
+        laugh_rate=laugh_rate,
+        question_rate=question_rate,
+        emoji_rate=emoji_rate,
+        exclaim_rate=exclaim_rate,
+        avg_burst=avg_burst,
+        phrases=phrases,
+    )
 
     return {
         "target_name": target_name,
         "target_text_messages": len(contents),
-        "avg_chars": round(statistics.mean(lengths), 2),
-        "median_chars": statistics.median(lengths),
-        "short_reply_rate": pct(short_count / max(len(lengths), 1)),
-        "laugh_rate": pct(laugh_count / max(len(contents), 1)),
-        "question_rate": pct(question_count / max(len(contents), 1)),
-        "emoji_rate": pct(emoji_count / max(len(contents), 1)),
+        "avg_chars": avg_chars,
+        "median_chars": median_chars,
+        "short_reply_rate": pct(short_rate),
+        "laugh_rate": pct(laugh_rate),
+        "question_rate": pct(question_rate),
+        "emoji_rate": pct(emoji_rate),
+        "exclaim_rate": pct(exclaim_rate),
+        "rates": {
+            "short": round(short_rate, 4),
+            "laugh": round(laugh_rate, 4),
+            "question": round(question_rate, 4),
+            "emoji": round(emoji_rate, 4),
+            "exclaim": round(exclaim_rate, 4),
+        },
         "burst_count": burst_count,
         "avg_burst_messages": round(avg_burst, 2),
-        "common_short_phrases": top_short_phrases(contents),
+        "common_short_phrases": phrases,
         "style_rules": style_rules,
+        "persona_dna": persona_dna,
     }
 
 
@@ -206,23 +346,50 @@ def format_sources(scored_docs: list[tuple[float, RagDoc]]) -> str:
     return "\n\n".join(blocks)
 
 
+def format_bullets(items: list[str]) -> str:
+    if not items:
+        return "- 无稳定信号"
+    return "\n".join(f"- {item}" for item in items)
+
+
+def format_persona_dna(persona: dict) -> str:
+    dna = persona.get("persona_dna") or {}
+    rhythm = dna.get("rhythm", {})
+    voice = dna.get("voice", {})
+    interaction = dna.get("interaction", {})
+    confidence = dna.get("confidence", {})
+    phrases = dna.get("phrase_bank") or persona.get("common_short_phrases") or []
+    anti_patterns = dna.get("anti_patterns") or []
+    phrase_line = "、".join(phrases[:10]) if phrases else "无稳定高频短句"
+    anti_pattern_line = "；".join(anti_patterns[:4]) if anti_patterns else "无明确反模式"
+
+    return f"""置信度：{confidence.get('label', 'Unknown')} - {confidence.get('summary', '')}
+节奏：{rhythm.get('label', '')}。{rhythm.get('summary', '')}
+语气：{voice.get('label', '')}。{voice.get('summary', '')}
+互动：{interaction.get('label', '')}。{interaction.get('summary', '')}
+高频短句/口头禅候选：{phrase_line}
+反模式：{anti_pattern_line}"""
+
+
 def build_prompt(query: str, persona: dict, scored_docs: list[tuple[float, RagDoc]]) -> str:
-    phrases = persona.get("common_short_phrases") or []
-    phrase_line = "、".join(phrases[:10]) if phrases else "无稳定高频短句。"
-    rules = "\n".join(f"- {rule}" for rule in persona.get("style_rules", []))
+    dna = persona.get("persona_dna") or {}
+    rules = format_bullets(persona.get("style_rules", []))
+    protocol = format_bullets(dna.get("response_protocol", []))
+    anti_patterns = format_bullets(dna.get("anti_patterns", []))
+    boundaries = format_bullets(dna.get("honest_boundaries", []))
     sources = format_sources(scored_docs)
 
-    return f"""你是一个私人的写作辅助模型，用来做聊天风格模拟练习。
-
-重要边界：
-- 你不是本人，不要声称自己是真实的「{persona['target_name']}」。
-- 不要输出身份证号、手机号、住址、账号、定位、银行卡、密码等隐私信息。
-- 不要编造历史事实；历史片段里没有的事实，用不确定语气或自然带过。
-- 不要帮助冒充本人去欺骗第三方。
+    return f"""你是一个私人写作辅助模型，用来做微信聊天风格模拟练习。
 
 任务：
-根据“当前上下文/用户消息”，写出一个像「{persona['target_name']}」会发的微信回复。
-只输出回复正文，不要解释，不要加标签。
+根据“当前上下文/用户消息”，写出一条像「{persona['target_name']}」会发的微信回复。
+只输出回复正文，不要解释，不要加标签，不要写分析过程。
+
+重要边界：
+{boundaries}
+
+Persona DNA：
+{format_persona_dna(persona)}
 
 风格画像：
 - 文本消息数：{persona['target_text_messages']}
@@ -232,7 +399,12 @@ def build_prompt(query: str, persona: dict, scored_docs: list[tuple[float, RagDo
 - 疑问/追问比例：{persona['question_rate']}
 - emoji 比例：{persona['emoji_rate']}
 - 平均连续回复条数：{persona['avg_burst_messages']}
-- 高频短句/口头禅候选：{phrase_line}
+
+回复协议：
+{protocol}
+
+反模式（不要这样回）：
+{anti_patterns}
 
 风格规则：
 {rules}
@@ -286,6 +458,7 @@ def call_deepseek(prompt: str, model: str | None = None) -> str:
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
         "temperature": 0.7,
+        "max_tokens": int(os.environ.get("PERSONA_MAX_TOKENS", "160")),
     }
     request = urllib.request.Request(
         f"{base_url}/chat/completions",
@@ -318,7 +491,7 @@ def call_openai(prompt: str, model: str | None = None) -> str:
         "model": model or os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"),
         "input": prompt,
         "temperature": 0.7,
-        "max_output_tokens": 400,
+        "max_output_tokens": int(os.environ.get("PERSONA_MAX_TOKENS", "160")),
     }
     request = urllib.request.Request(
         "https://api.openai.com/v1/responses",

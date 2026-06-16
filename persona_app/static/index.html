@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Persona RAG</title>
+    <title>ThunderPersona</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -11,10 +11,10 @@
       <aside class="sidebar">
         <div class="brand-row">
           <div>
-            <div class="brand">Persona RAG</div>
+            <div class="brand">ThunderPersona</div>
             <div id="targetName" class="muted">Loading</div>
           </div>
-          <button id="reloadBtn" class="icon-btn" title="Reload data">↻</button>
+          <button id="reloadBtn" class="icon-btn" title="Reload data" aria-label="Reload data">↻</button>
         </div>
 
         <section class="panel">
@@ -56,6 +56,56 @@
           </label>
           <div id="apiState" class="status-pill">Checking API</div>
         </section>
+
+        <section class="panel">
+          <div class="panel-title-row">
+            <h2>Distilled Personas</h2>
+            <button id="refreshPersonasBtn" class="tiny-btn" title="Refresh personas">↻</button>
+          </div>
+          <div id="personaList" class="persona-list"></div>
+        </section>
+
+        <section class="panel distill-panel">
+          <div class="panel-title-row">
+            <h2>Distill Contact</h2>
+            <button id="refreshContactsBtn" class="tiny-btn">Index</button>
+          </div>
+          <label class="field">
+            <span>Search name or remark</span>
+            <input id="contactSearch" type="search" placeholder="输入微信好友名/备注名" autocomplete="off" />
+          </label>
+          <div id="contactIndexState" class="muted small-text">Contact index not loaded</div>
+          <div id="contactResults" class="contact-results"></div>
+          <div id="selectedContact" class="selected-contact muted">No contact selected</div>
+          <label class="field compact-field">
+            <span>Distill level</span>
+            <select id="distillLevel">
+              <option value="light">轻量 · 快速预览</option>
+              <option value="medium" selected>中量 · 推荐默认</option>
+              <option value="full">全量级 · 最像但更慢</option>
+            </select>
+          </label>
+          <div id="distillLevelHelp" class="muted small-text level-help"></div>
+          <label class="field compact-field">
+            <span>Advanced export limit</span>
+            <input id="exportLimit" type="number" min="100" max="200000" value="20000" />
+          </label>
+          <label class="check-row">
+            <input id="buildVector" type="checkbox" />
+            <span>Build FAISS index</span>
+          </label>
+          <button id="distillBtn" class="primary full-btn" disabled>Distill & Switch</button>
+          <div id="distillProgress" class="distill-progress hidden">
+            <div class="progress-head">
+              <strong id="distillProgressTitle">Waiting</strong>
+              <span id="distillElapsed">0s</span>
+            </div>
+            <div class="progress-track">
+              <div id="distillProgressBar" class="progress-bar"></div>
+            </div>
+            <div id="distillProgressMessage" class="muted small-text">Ready</div>
+          </div>
+        </section>
       </aside>
 
       <main class="workspace">
@@ -66,16 +116,60 @@
           </div>
           <div class="top-actions">
             <span id="memoryState" class="status-pill memory-pill">0 turns in context</span>
+            <button id="newChatBtn" class="secondary">New Chat</button>
+            <button id="saveChatBtn" class="secondary">Save Chat</button>
             <button id="clearMemoryBtn" class="secondary">Clear Context</button>
+            <button id="copyDnaBtn" class="secondary">Copy DNA</button>
             <button id="copyBtn" class="secondary">Copy Output</button>
           </div>
         </header>
 
         <section class="composer">
-          <textarea id="queryInput" rows="5" placeholder="输入当前消息或多轮上下文"></textarea>
+          <textarea id="queryInput" rows="5" placeholder="输入当前微信消息，或粘贴多轮上下文"></textarea>
           <div class="action-row">
             <button id="promptBtn" class="primary">Generate Prompt</button>
             <button id="answerBtn" class="secondary">Generate Answer</button>
+          </div>
+        </section>
+
+        <section class="dna-area">
+          <div class="section-title">
+            <h2>Persona DNA</h2>
+            <span id="dnaConfidence" class="status-pill">Unknown</span>
+          </div>
+          <div class="dna-grid">
+            <article class="dna-card">
+              <h3>Rhythm</h3>
+              <strong id="dnaRhythmLabel">-</strong>
+              <p id="dnaRhythmSummary">-</p>
+              <ul id="dnaRhythmSignals" class="mini-list"></ul>
+            </article>
+            <article class="dna-card">
+              <h3>Voice</h3>
+              <strong id="dnaVoiceLabel">-</strong>
+              <p id="dnaVoiceSummary">-</p>
+              <ul id="dnaVoiceSignals" class="mini-list"></ul>
+            </article>
+            <article class="dna-card">
+              <h3>Interaction</h3>
+              <strong id="dnaInteractionLabel">-</strong>
+              <p id="dnaInteractionSummary">-</p>
+              <ul id="dnaInteractionSignals" class="mini-list"></ul>
+            </article>
+          </div>
+          <div class="dna-bottom">
+            <div>
+              <h3>Phrase Bank</h3>
+              <div id="phraseBank" class="tag-list"></div>
+            </div>
+            <div>
+              <h3>Honest Boundaries</h3>
+              <ul id="dnaBoundaries" class="mini-list"></ul>
+            </div>
+            <div>
+              <h3>Anti-patterns</h3>
+              <ul id="dnaAntiPatterns" class="mini-list"></ul>
+            </div>
           </div>
         </section>
 

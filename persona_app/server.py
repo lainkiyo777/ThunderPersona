@@ -5,11 +5,13 @@ import json
 import mimetypes
 import sys
 import threading
+import time
+from uuid import uuid4
 from dataclasses import dataclass
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,7 +32,13 @@ from wechat_persona_rag_mvp import (  # noqa: E402
     provider_info,
     read_jsonl,
 )
-from wechat_vector_index import FaissVectorIndex  # noqa: E402
+from wechat_persona_manager import (  # noqa: E402
+    distill_contact,
+    get_distilled_persona,
+    list_distilled_personas,
+    refresh_contact_index,
+    search_contacts,
+)
 
 
 class PersonaRuntime:
@@ -49,7 +57,7 @@ class PersonaRuntime:
         self.provider = provider
         self.model = model
         self.vector_index_dir = vector_index_dir
-        self.vector_index: FaissVectorIndex | None = None
+        self.vector_index: object | None = None
         self.local_lora: LocalLoraRuntime | None = None
         self.reload()
 
@@ -68,7 +76,13 @@ class PersonaRuntime:
         self.persona = build_persona(self.messages, self.target_name)
         self.vector_index = None
         if self.vector_index_dir and (self.vector_index_dir / "manifest.json").is_file():
-            self.vector_index = FaissVectorIndex(self.vector_index_dir, device="cpu")
+            try:
+                from wechat_vector_index import FaissVectorIndex
+
+                self.vector_index = FaissVectorIndex(self.vector_index_dir, device="cpu")
+            except Exception as exc:  # noqa: BLE001
+                print(f"Vector index disabled: {exc}")
+                self.vector_index = None
 
     def vector_search(self, query: str, top_k: int) -> list[tuple[float, RagDoc]]:
         if self.vector_index is None:
@@ -118,6 +132,21 @@ class PersonaRuntime:
         prompt = build_prompt(query, self.persona, scored_docs)
         return prompt, scored_docs
 
+    def switch(
+        self,
+        messages_file: Path,
+        rag_file: Path,
+        target_name: str | None,
+        vector_index_dir: Path | None,
+    ) -> None:
+        self.messages_file = messages_file
+        self.rag_file = rag_file
+        self.target_name = target_name
+        self.vector_index_dir = vector_index_dir
+        self.vector_index = None
+        self.local_lora = None
+        self.reload()
+
     def generate_local_lora(self, prompt: str) -> str:
         if self.local_lora is None:
             self.local_lora = LocalLoraRuntime(
@@ -159,7 +188,7 @@ class LocalLoraRuntime:
             {
                 "role": "system",
                 "content": (
-                    "只输出目标联系人风格的微信回复正文。最多两行，每行尽量短。"
+                    "只输出目标联系人的微信回复正文。最多两行，每行尽量短。"
                     "不要解释，不要复述用户消息，不要连续列出候选回复。"
                 ),
             },
@@ -201,7 +230,7 @@ def clean_local_lora_answer(text: str) -> str:
 
     lines: list[str] = []
     for raw_line in cleaned.splitlines():
-        line = raw_line.strip(" \t-—*·0123456789.、：:")
+        line = raw_line.strip(" \t-•·0123456789.、：:")
         if not line:
             continue
         if line in {"分析", "解释", "候选回复"}:
@@ -216,11 +245,137 @@ def clean_local_lora_answer(text: str) -> str:
 
     answer = "\n".join(lines).strip()
     if len(answer) > 48:
-        answer = answer[:48].rstrip("，。！？!?、；;,. ")
+        answer = answer[:48].rstrip("，。！？?、；;,. ")
     return answer
 
 
 RUNTIME: PersonaRuntime
+RUNTIME_LOCK = threading.RLock()
+DISTILL_JOBS: dict[str, dict] = {}
+DISTILL_JOBS_LOCK = threading.RLock()
+
+
+def active_persona_slug() -> str:
+    name = RUNTIME.messages_file.name
+    if name.endswith(".messages.jsonl"):
+        return name.removesuffix(".messages.jsonl")
+    return RUNTIME.messages_file.stem
+
+
+def runtime_payload() -> dict:
+    info = provider_info(RUNTIME.provider, RUNTIME.model)
+    return {
+        "version": Handler.server_version,
+        "persona": RUNTIME.persona,
+        "active_slug": active_persona_slug(),
+        "messages_file": str(RUNTIME.messages_file),
+        "rag_file": str(RUNTIME.rag_file),
+        "doc_count": len(RUNTIME.docs),
+        "message_count": len(RUNTIME.messages),
+        "vector_index_available": RUNTIME.vector_index is not None,
+        "vector_index_dir": str(RUNTIME.vector_index_dir) if RUNTIME.vector_index_dir else None,
+        "local_lora_available": (
+            EXPORTS / "lora" / "output" / "qwen2.5-1.5b-persona-lora" / "adapter_model.safetensors"
+        ).is_file(),
+        **info,
+    }
+
+
+def public_distill_job(job: dict) -> dict:
+    return {
+        key: value
+        for key, value in job.items()
+        if key not in {"thread"}
+    }
+
+
+def update_distill_job(job_id: str, **updates: object) -> None:
+    with DISTILL_JOBS_LOCK:
+        job = DISTILL_JOBS[job_id]
+        job.update(updates)
+        job["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        job["elapsed_seconds"] = round(time.time() - float(job["started_ts"]), 1)
+
+
+def start_distill_job(contact: dict, export_limit: int, build_vector: bool) -> dict:
+    display_name = str(
+        contact.get("display_name")
+        or contact.get("remark")
+        or contact.get("nick_name")
+        or contact.get("username")
+        or "selected contact"
+    )
+    job_id = uuid4().hex
+    now = time.time()
+    job = {
+        "job_id": job_id,
+        "status": "queued",
+        "stage": "queued",
+        "progress": 3,
+        "message": f"Queued distillation for {display_name}",
+        "contact_name": display_name,
+        "export_limit": export_limit,
+        "build_vector": build_vector,
+        "started_ts": now,
+        "started_at": datetime.now().isoformat(timespec="seconds"),
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "elapsed_seconds": 0,
+        "result": None,
+        "error": None,
+    }
+
+    with DISTILL_JOBS_LOCK:
+        DISTILL_JOBS[job_id] = job
+
+    def progress(stage: str, percent: int, message: str) -> None:
+        update_distill_job(
+            job_id,
+            status="running",
+            stage=stage,
+            progress=max(0, min(int(percent), 99)),
+            message=message,
+        )
+
+    def worker() -> None:
+        try:
+            progress("starting", 5, f"Starting distillation for {display_name}")
+            persona = distill_contact(
+                contact,
+                export_limit=export_limit,
+                build_vector=build_vector,
+                progress=progress,
+            )
+            progress("switching", 96, "Switching workbench to the new persona")
+            with RUNTIME_LOCK:
+                RUNTIME.switch(
+                    Path(persona["messages_file"]),
+                    Path(persona["rag_file"]),
+                    persona.get("target_name"),
+                    Path(persona["vector_index_dir"]) if build_vector else None,
+                )
+                payload = runtime_payload()
+            update_distill_job(
+                job_id,
+                status="completed",
+                stage="completed",
+                progress=100,
+                message=f"Finished distilling {payload['persona']['target_name']}",
+                result={"distilled": persona, "runtime": payload},
+            )
+        except Exception as exc:  # noqa: BLE001
+            update_distill_job(
+                job_id,
+                status="failed",
+                stage="failed",
+                progress=100,
+                message="Distillation failed",
+                error=str(exc),
+            )
+
+    thread = threading.Thread(target=worker, daemon=True)
+    job["thread"] = thread
+    thread.start()
+    return public_distill_job(job)
 
 
 def json_response(handler: BaseHTTPRequestHandler, payload: dict, status: int = 200) -> None:
@@ -272,10 +427,10 @@ def build_session_query(query: str, history: list[dict[str, str]]) -> str:
     if not history:
         return query
 
-    lines = ["Recent browser-session context, oldest to newest:"]
+    lines = ["浏览器会话上下文，按时间从旧到新："]
     for item in history:
         lines.append(f"{item['role']}: {item['content']}")
-    lines.extend(["", "Current user message:", query])
+    lines.extend(["", "当前用户消息：", query])
     return "\n".join(lines)
 
 
@@ -306,6 +461,7 @@ def save_run(query: str, prompt: str, answer: str | None, sources: list[dict]) -
             {
                 "query": query,
                 "answer": answer,
+                "persona_dna": RUNTIME.persona.get("persona_dna"),
                 "sources": [
                     {
                         "score": item["score"],
@@ -324,8 +480,77 @@ def save_run(query: str, prompt: str, answer: str | None, sources: list[dict]) -
     return {"prompt_path": str(prompt_path), "meta_path": str(meta_path)}
 
 
+def clean_chat_transcript(raw_messages: object) -> list[dict[str, str]]:
+    if not isinstance(raw_messages, list):
+        return []
+    cleaned: list[dict[str, str]] = []
+    for item in raw_messages:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "")).lower()
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(item.get("content", "")).strip()
+        if not content:
+            continue
+        timestamp = str(item.get("timestamp", "")).strip()
+        cleaned.append({"role": role, "content": content, "timestamp": timestamp})
+    return cleaned
+
+
+def save_chat_session(raw_messages: object) -> dict:
+    messages = clean_chat_transcript(raw_messages)
+    if not messages:
+        raise ValueError("No chat messages to save.")
+
+    with RUNTIME_LOCK:
+        target_name = str(RUNTIME.persona.get("target_name") or "persona")
+        slug = active_persona_slug()
+
+    session_dir = EXPORTS / "chat_sessions"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    safe_slug = "".join(char if char.isalnum() or char in "-_" else "-" for char in slug).strip("-") or "persona"
+    base = session_dir / f"{stamp}-{safe_slug}"
+    json_path = base.with_suffix(".json")
+    markdown_path = base.with_suffix(".md")
+
+    payload = {
+        "version": 1,
+        "target_name": target_name,
+        "active_slug": slug,
+        "saved_at": datetime.now().isoformat(timespec="seconds"),
+        "message_count": len(messages),
+        "messages": messages,
+    }
+    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    lines = [
+        f"# Chat Session - {target_name}",
+        "",
+        f"- Saved at: {payload['saved_at']}",
+        f"- Persona: {target_name}",
+        f"- Messages: {len(messages)}",
+        "",
+        "---",
+        "",
+    ]
+    for message in messages:
+        label = "You" if message["role"] == "user" else target_name
+        when = f" ({message['timestamp']})" if message.get("timestamp") else ""
+        lines.extend([f"## {label}{when}", "", message["content"], ""])
+    markdown_path.write_text("\n".join(lines), encoding="utf-8")
+
+    return {
+        "ok": True,
+        "json_path": str(json_path),
+        "markdown_path": str(markdown_path),
+        "message_count": len(messages),
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "PersonaRagMVP/1.0"
+    server_version = "ThunderPersona/1.1"
 
     def log_message(self, fmt: str, *args: object) -> None:
         print(f"[{datetime.now().isoformat(timespec='seconds')}] {self.address_string()} {fmt % args}")
@@ -336,22 +561,37 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             path = "/index.html"
         if path == "/api/persona":
-            json_response(
-                self,
-                {
-                    "persona": RUNTIME.persona,
-                    "messages_file": str(RUNTIME.messages_file),
-                    "rag_file": str(RUNTIME.rag_file),
-                    "doc_count": len(RUNTIME.docs),
-                    "message_count": len(RUNTIME.messages),
-                    "vector_index_available": RUNTIME.vector_index is not None,
-                    "vector_index_dir": str(RUNTIME.vector_index_dir) if RUNTIME.vector_index_dir else None,
-                    "local_lora_available": (
-                        EXPORTS / "lora" / "output" / "qwen2.5-1.5b-persona-lora" / "adapter_model.safetensors"
-                    ).is_file(),
-                    **provider_info(RUNTIME.provider, RUNTIME.model),
-                },
-            )
+            with RUNTIME_LOCK:
+                payload = runtime_payload()
+            json_response(self, payload)
+            return
+
+        if path == "/api/personas":
+            personas = list_distilled_personas()
+            with RUNTIME_LOCK:
+                active = active_persona_slug()
+            for item in personas:
+                item["active"] = item["slug"] == active
+            json_response(self, {"personas": personas, "active_slug": active})
+            return
+
+        if path == "/api/contacts":
+            params = parse_qs(parsed.query)
+            query = (params.get("query") or params.get("q") or [""])[0]
+            limit = int((params.get("limit") or ["30"])[0])
+            json_response(self, search_contacts(query, max(1, min(limit, 80))))
+            return
+
+        if path == "/api/distill/job":
+            params = parse_qs(parsed.query)
+            job_id = (params.get("job_id") or [""])[0]
+            with DISTILL_JOBS_LOCK:
+                job = DISTILL_JOBS.get(job_id)
+                payload = public_distill_job(job) if job else None
+            if not payload:
+                json_response(self, {"error": f"Job not found: {job_id}"}, status=404)
+                return
+            json_response(self, payload)
             return
 
         file_path = (STATIC / path.lstrip("/")).resolve()
@@ -379,14 +619,19 @@ class Handler(BaseHTTPRequestHandler):
                 answer_backend = str(payload.get("answer_backend", "api")).lower()
                 history = clean_history(payload.get("history", []))
                 session_query = build_session_query(query, history)
-                prompt, scored_docs = RUNTIME.build(session_query, top_k, retriever)
+                with RUNTIME_LOCK:
+                    prompt, scored_docs = RUNTIME.build(session_query, top_k, retriever)
+                    current_persona = RUNTIME.persona
+                    vector_available = RUNTIME.vector_index is not None
                 sources = source_payload(scored_docs)
                 answer = None
                 if want_answer:
                     if answer_backend == "local_lora":
-                        answer = RUNTIME.generate_local_lora(prompt)
+                        with RUNTIME_LOCK:
+                            answer = RUNTIME.generate_local_lora(prompt)
                     else:
-                        answer = call_model(prompt, RUNTIME.provider, RUNTIME.model)
+                        with RUNTIME_LOCK:
+                            answer = call_model(prompt, RUNTIME.provider, RUNTIME.model)
 
                 saved = None
                 if bool(payload.get("save")):
@@ -400,17 +645,99 @@ class Handler(BaseHTTPRequestHandler):
                         "answer": answer,
                         "answer_backend": answer_backend,
                         "history_used": len(history),
+                        "vector_index_available": vector_available,
                         "sources": sources,
                         "retriever": retriever,
                         "saved": saved,
-                        "persona": RUNTIME.persona,
+                        "persona": current_persona,
                     },
                 )
                 return
 
+            if parsed.path == "/api/contacts/refresh":
+                payload = read_body(self)
+                limit = int(payload.get("limit", 100000))
+                index = refresh_contact_index(max(1, min(limit, 200000)))
+                json_response(
+                    self,
+                    {
+                        "ok": True,
+                        "updated_at": index.get("updated_at"),
+                        "total": len(index.get("contacts") or []),
+                    },
+                )
+                return
+
+            if parsed.path == "/api/chat-session/save":
+                payload = read_body(self)
+                try:
+                    saved = save_chat_session(payload.get("messages"))
+                except ValueError as exc:
+                    json_response(self, {"error": str(exc)}, status=400)
+                    return
+                json_response(self, saved)
+                return
+
+            if parsed.path == "/api/distill":
+                payload = read_body(self)
+                contact = payload.get("contact")
+                if not isinstance(contact, dict):
+                    json_response(self, {"error": "Missing selected contact."}, status=400)
+                    return
+                export_limit = int(payload.get("export_limit", 20000))
+                build_vector = bool(payload.get("build_vector", False))
+                persona = distill_contact(contact, export_limit=max(1, min(export_limit, 200000)), build_vector=build_vector)
+                with RUNTIME_LOCK:
+                    RUNTIME.switch(
+                        Path(persona["messages_file"]),
+                        Path(persona["rag_file"]),
+                        persona.get("target_name"),
+                        Path(persona["vector_index_dir"]) if build_vector else None,
+                    )
+                    payload = runtime_payload()
+                json_response(self, {"ok": True, "distilled": persona, "runtime": payload})
+                return
+
+            if parsed.path == "/api/distill/start":
+                payload = read_body(self)
+                contact = payload.get("contact")
+                if not isinstance(contact, dict):
+                    json_response(self, {"error": "Missing selected contact."}, status=400)
+                    return
+                export_limit = int(payload.get("export_limit", 20000))
+                build_vector = bool(payload.get("build_vector", False))
+                job = start_distill_job(
+                    contact,
+                    export_limit=max(1, min(export_limit, 200000)),
+                    build_vector=build_vector,
+                )
+                json_response(self, {"ok": True, "job": job})
+                return
+
+            if parsed.path == "/api/personas/switch":
+                payload = read_body(self)
+                slug = str(payload.get("slug", "")).strip()
+                persona = get_distilled_persona(slug)
+                if not persona:
+                    json_response(self, {"error": f"Persona not found: {slug}"}, status=404)
+                    return
+                vector_dir = Path(persona["vector_index_dir"])
+                with RUNTIME_LOCK:
+                    RUNTIME.switch(
+                        Path(persona["messages_file"]),
+                        Path(persona["rag_file"]),
+                        persona.get("target_name"),
+                        vector_dir if (vector_dir / "manifest.json").is_file() else None,
+                    )
+                    payload = runtime_payload()
+                json_response(self, {"ok": True, "runtime": payload})
+                return
+
             if parsed.path == "/api/reload":
-                RUNTIME.reload()
-                json_response(self, {"ok": True, "persona": RUNTIME.persona})
+                with RUNTIME_LOCK:
+                    RUNTIME.reload()
+                    payload = runtime_payload()
+                json_response(self, {"ok": True, **payload})
                 return
 
             if parsed.path == "/api/shutdown":
