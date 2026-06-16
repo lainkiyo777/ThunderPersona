@@ -8,7 +8,8 @@ RAG-backed WeChat persona workbench: export a chat history, build a searchable s
 
 - Cleans WeChat markdown exports into structured JSONL messages.
 - Builds RAG chunks for BM25 retrieval and optional FAISS vector search.
-- Generates a persona prompt from historical style statistics and retrieved chat snippets.
+- Generates a persona prompt from historical style statistics, retrieved chat snippets, and a Persona DNA profile.
+- Surfaces a Persona DNA panel with rhythm, voice, interaction style, phrase bank, anti-patterns, confidence, and honest boundaries.
 - Serves a local web workbench at `http://127.0.0.1:8765`.
 - Supports answer backends:
   - `DeepSeek` via OpenAI-compatible chat completions.
@@ -52,6 +53,7 @@ Prepare your WeChat export into the expected local files:
 ```powershell
 .\.venv-wechat-cli\Scripts\python.exe scripts\prepare_wechat_persona_dataset.py `
   --input .wechat-exports\your-chat.md `
+  --target-name "Contact Name" `
   --output-prefix .wechat-exports\persona
 ```
 
@@ -70,6 +72,46 @@ Open:
 ```text
 http://127.0.0.1:8765
 ```
+
+## Contact Distillation
+
+The browser app includes a contact distillation panel:
+
+- `Index` refreshes `.wechat-exports/contact_index.json` from `wechat-cli contacts`. It stores contact names, remarks, aliases, and wxids only.
+- Search matches names, remarks, aliases, and wxids with fuzzy matching.
+- `Distill & Switch` exports only the selected chat with `wechat-cli export`, runs the same data prep pipeline, and switches the workbench to the new persona.
+- Distillation runs as a background job with stage, progress percent, and elapsed-time polling in the browser.
+- `Distilled Personas` lists generated personas and lets you switch without reloading every WeChat chat history.
+
+Distillation levels:
+
+- Light: up to 5,000 messages. Fast preview, lower style coverage.
+- Medium: up to 20,000 messages. Recommended default for most contacts.
+- Full: up to 200,000 messages and FAISS recommended. Best coverage, slowest run, largest disk use.
+
+Generated contact indexes and persona data stay under `.wechat-exports/`, which is ignored by Git.
+
+## Chat Sessions
+
+The workbench keeps two chat states:
+
+- Recent context: the last turns sent back into RAG generation for follow-up continuity.
+- Current transcript: the full visible chat session for saving.
+
+Use `New Chat` to start a clean conversation with the active persona. Use `Save Chat` to write the current transcript to `.wechat-exports/chat_sessions/` as both JSON and Markdown.
+
+## Persona DNA
+
+ThunderPersona borrows the strongest idea from high-quality skill distillation projects: do not only mimic surface wording. The app now extracts a compact profile before each prompt:
+
+- Rhythm: average length, short-reply rate, and burst behavior.
+- Voice: laugh markers, question rate, emoji rate, and punctuation intensity.
+- Interaction: when to comfort, tease, ask back, or answer directly.
+- Phrase bank: recurring short replies and口头禅 candidates.
+- Anti-patterns: reply shapes to avoid, such as customer-service prose, AI analysis, over-stuffed catchphrases, and fabricated context.
+- Honest boundaries: what the simulation should not infer or fabricate.
+
+This is used both in the browser panel and inside generated prompts, so the model has a clearer operating contract instead of only seeing raw examples.
 
 ## Vector Search
 

@@ -22,10 +22,19 @@ def main() -> int:
 
     stdout = out_path.open("ab", buffering=0)
     stderr = err_path.open("ab", buffering=0)
-    args = [str(python), str(server), *sys.argv[1:]]
+    args = [str(python), "-u", str(server), *sys.argv[1:]]
+    env = os.environ.copy()
+    if os.name == "nt" and "Path" in env and "PATH" in env:
+        # Windows treats environment keys case-insensitively, but some process
+        # launch paths fail when both spellings are present.
+        if len(env.get("Path", "")) >= len(env.get("PATH", "")):
+            env.pop("PATH", None)
+        else:
+            env["Path"] = env.pop("PATH")
 
     popen_kwargs = {
         "cwd": str(root),
+        "env": env,
         "stdin": subprocess.DEVNULL,
         "stdout": stdout,
         "stderr": stderr,
@@ -34,7 +43,7 @@ def main() -> int:
         popen_kwargs["creationflags"] = (
             subprocess.DETACHED_PROCESS
             | subprocess.CREATE_NEW_PROCESS_GROUP
-            | subprocess.CREATE_NO_WINDOW
+            | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
         )
     else:
         popen_kwargs["start_new_session"] = True
