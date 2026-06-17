@@ -5,6 +5,7 @@
 __pycache__/
 *.pyc
 .persona-app*.log
+.self-persona*.log
 .persona-app.pid
 .start-test.txt
 .env

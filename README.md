@@ -92,6 +92,30 @@ Distillation levels:
 
 Generated contact indexes and persona data stay under `.wechat-exports/`, which is ignored by Git.
 
+## Self Persona
+
+You can also distill the owner of the WeChat account rather than a contact.
+`scripts/prepare_self_persona_dataset.py` reverses the existing role convention so messages originally marked as `me` become the simulated target.
+
+Build from already exported persona/message files:
+
+```powershell
+.\.venv-wechat-cli\Scripts\python.exe scripts\prepare_self_persona_dataset.py `
+  --output-prefix .wechat-exports\self
+```
+
+Build from recent WeChat sessions first, then aggregate:
+
+```powershell
+.\.venv-wechat-cli\Scripts\python.exe scripts\prepare_self_persona_dataset.py `
+  --export-sessions `
+  --session-limit 100000 `
+  --source-dir .wechat-exports\self_sources `
+  --output-prefix .wechat-exports\self
+```
+
+The generated `self.messages.jsonl`, `self.rag_docs.jsonl`, `self.sft.jsonl`, session markdown exports, and reports stay under `.wechat-exports/` and are not committed.
+
 ## Chat Sessions
 
 The workbench keeps two chat states:
